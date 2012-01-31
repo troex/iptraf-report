@@ -1,28 +1,26 @@
-#!/usr/bin/env ruby1.9.1
+#!/usr/bin/env ruby
+#
+# Generate simple text reports from iptraf logs
+# Author: Troex Nevelin <troex@fury.scancode.ru>
 
 log = ARGV.first
-gw = '81.211.22.2'
+me = '81.211.22.2'
 
+# do not edit below
 i = 0
-input = {}
-output = {}
-total = { 'in' => 0, 'out' => 0 }
-ports = {}
-
-def show_ports(ports)
-  if ports.count < 10
-    ret = ports.to_s
-  else
-    ports.sort!
-    ret = '[%d-%d] (%d)' % [ports.first, ports.last, ports.count]
-  end
-  ret
-end
+traffic = {
+  'in' => {},
+  'out' => {},
+  'ports' => {},
+  'total-in' => 0,
+  'total out' => 0
+}
 
 GIGA_SIZE = 1073741824.0
 MEGA_SIZE = 1048576.0
 KILO_SIZE = 1024.0
 def human_size(size)
+  size = size.to_i
   case
     when size < KILO_SIZE
       "%d  B" % size
@@ -35,14 +33,24 @@ def human_size(size)
   end
 end
 
+def show_ports(ports)
+  if ports.count < 10
+    ret = ports.to_s
+  else
+    ports.sort!
+    ret = '[%d-%d] (%d)' % [ports.first, ports.last, ports.count]
+  end
+  ret
+end
+
 File.open(log, 'r') do |file|
   while (line = file.gets)
     i += 1
-    date, protocol, interface, traffic, direction, state, info = line.chomp.split(';').map { |x| x.strip }
+    date, protocol, interface, traf, direction, state, info = line.chomp.split(';').map { |x| x.strip }
 
     next if direction.nil?
 
-    bytes = traffic.match(/\d+/).to_a.first.to_i
+    bytes = traf.match(/\d+/).to_a.first.to_i
     m, from, from_port, to, to_port = direction.match(/from (.*)\:(\d+) to (.*)\:(\d+)/).to_a
 
     case protocol
@@ -53,7 +61,7 @@ File.open(log, 'r') do |file|
       #p '%s -> %s = %d' % [from, to, bytes]
 
     when 'UDP'
-      # ok
+      # nothing to do
 
     when 'ICMP'
       m, from, to = direction.match(/from (.*) to (.*)/).to_a
@@ -64,40 +72,24 @@ File.open(log, 'r') do |file|
     end # case
 
     port = (from_port.to_i < to_port.to_i ? from_port.to_i : to_port.to_i)
+    key = '%15s -> %-15s' % [from, to]
+    direction = (to == me) ? 'in' : 'out'
 
-    k = '%15s -> %-15s' % [from, to]
+    traffic[direction][key] ||= 0
+    traffic[direction][key] += bytes.to_i
+    traffic['total-' + direction] += bytes.to_i
+    traffic['ports'][key] ||= []
+    traffic['ports'][key].push(port) if port > 0 and !traffic['ports'][key].include?(port)
 
-    if from == gw
-      from = 'gw'
-      output[k] ||= 0
-      output[k] += bytes.to_i
-      ports[k] ||= []
-      ports[k].push(port) if port > 0 and !ports[k].include?(port)
-      total['out'] += bytes.to_i
-    end
-
-    if to == gw
-      to = 'gw'
-      input[k] ||= 0
-      input[k] += bytes.to_i
-      ports[k] ||= []
-      ports[k].push(port) if port > 0 and !ports[k].include?(port)
-      total['in'] += bytes.to_i
-    end
     #puts "#{i}: #{line}"
   end
 end
 
-puts "=== OUT ==="
-output.sort_by { |k, v| v }.reverse.each do |k, v|
-  break if v < 10000
-  puts '%s = %8s  %s' % [k, human_size(v), show_ports(ports[k])]
+['in', 'out'].each do |direction|
+  puts direction # decor
+  traffic[direction].sort_by { |k, v| v }.reverse.each do |key, bytes|
+    break if bytes < 10000 # skip if less
+    puts '%s = %8s  %s' % [key, human_size(bytes), show_ports(traffic['ports'][key])]
+  end
+  puts "Total %3s: %12s\n\n" % [direction, human_size(traffic['total-' + direction])]
 end
-puts "Total OUT: %12d\n\n" % total['out']
-
-puts "=== IN ==="
-input.sort_by { |k, v| v }.reverse.each do |k, v|
-  break if v < 10000
-  puts '%s = %8s  %s' % [k, human_size(v), show_ports(ports[k])]
-end
-puts "Total IN:  %12d\n\n" % total['in']
